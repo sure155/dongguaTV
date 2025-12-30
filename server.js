@@ -106,14 +106,17 @@ async function fetchChineseTitleFromTMDB(englishTitle) {
     if (!TMDB_API_KEY) return [];
 
     // 构建 TMDB API 基础 URL（支持代理）
-    // 注意：Cloudflare Worker 代理路径格式为 /api/3/...
+    // 代理内部会转发到 api.themoviedb.org/3/，所以只需要添加路径即可
     const TMDB_BASE = TMDB_PROXY_URL
-        ? `${TMDB_PROXY_URL.replace(/\/$/, '')}/api`  // 移除末尾斜杠并添加 /api
+        ? TMDB_PROXY_URL.replace(/\/$/, '')  // 移除末尾斜杠
         : 'https://api.themoviedb.org';
 
     try {
         // 先用英文搜索找到影片 ID
-        const searchUrl = `${TMDB_BASE}/3/search/multi?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(englishTitle)}&language=en-US`;
+        // 代理路径格式: /search/multi?... (代理会转发到 /3/search/multi)
+        const searchUrl = TMDB_PROXY_URL
+            ? `${TMDB_BASE}/search/multi?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(englishTitle)}&language=en-US`
+            : `${TMDB_BASE}/3/search/multi?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(englishTitle)}&language=en-US`;
         const searchResponse = await axios.get(searchUrl, { timeout: 8000 });
 
         if (!searchResponse.data.results || searchResponse.data.results.length === 0) {
@@ -129,7 +132,9 @@ async function fetchChineseTitleFromTMDB(englishTitle) {
         }
 
         // 用中文语言获取详情，TMDB 会返回中文标题
-        const detailUrl = `${TMDB_BASE}/3/${mediaType}/${id}?api_key=${TMDB_API_KEY}&language=zh-CN`;
+        const detailUrl = TMDB_PROXY_URL
+            ? `${TMDB_BASE}/${mediaType}/${id}?api_key=${TMDB_API_KEY}&language=zh-CN`
+            : `${TMDB_BASE}/3/${mediaType}/${id}?api_key=${TMDB_API_KEY}&language=zh-CN`;
         const detailResponse = await axios.get(detailUrl, { timeout: 8000 });
 
         const chineseTitles = [];
@@ -142,7 +147,9 @@ async function fetchChineseTitleFromTMDB(englishTitle) {
 
         // 尝试获取更多别名（alternative_titles）- 使用较短超时，失败不影响主流程
         try {
-            const altUrl = `${TMDB_BASE}/3/${mediaType}/${id}/alternative_titles?api_key=${TMDB_API_KEY}`;
+            const altUrl = TMDB_PROXY_URL
+                ? `${TMDB_BASE}/${mediaType}/${id}/alternative_titles?api_key=${TMDB_API_KEY}`
+                : `${TMDB_BASE}/3/${mediaType}/${id}/alternative_titles?api_key=${TMDB_API_KEY}`;
             const altResponse = await axios.get(altUrl, { timeout: 5000 });
 
             // 电影用 titles，电视剧用 results
@@ -791,13 +798,19 @@ app.get('/api/tmdb-proxy', async (req, res) => {
 
     try {
         // 优先使用 TMDB_PROXY_URL 代理，没有配置则直连
-        // 注意：Cloudflare Worker 代理路径格式为 /api/3/...
+        // 代理内部会转发到 api.themoviedb.org/3/，所以只需要添加路径即可
         const TMDB_PROXY_URL = process.env['TMDB_PROXY_URL'];
         const TMDB_BASE = TMDB_PROXY_URL
-            ? `${TMDB_PROXY_URL.replace(/\/$/, '')}/api/3`  // 移除末尾斜杠并添加 /api/3
+            ? TMDB_PROXY_URL.replace(/\/$/, '')  // 移除末尾斜杠
             : 'https://api.themoviedb.org/3';
 
-        const response = await axios.get(`${TMDB_BASE}${tmdbPath}`, {
+        // 如果使用代理，tmdbPath 已经是完整路径如 /trending/all/week
+        // 如果直连，需要拼接到 /3 后面
+        const finalUrl = TMDB_PROXY_URL
+            ? `${TMDB_BASE}${tmdbPath}`  // 代理：直接拼接路径
+            : `${TMDB_BASE}${tmdbPath}`; // 直连：也是直接拼接（TMDB_BASE 已包含 /3）
+
+        const response = await axios.get(finalUrl, {
             params: {
                 ...params,
                 api_key: TMDB_API_KEY,
